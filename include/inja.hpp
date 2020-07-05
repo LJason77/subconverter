@@ -1813,6 +1813,8 @@ struct Bytecode {
 
 
 
+#define INJA_VARARGS (unsigned int) (~0) // use special number for VARARGS functions
+
 namespace inja {
 
 using json = nlohmann::json;
@@ -1873,10 +1875,16 @@ class FunctionStorage {
     if (it == m_map.end()) {
       return nullptr;
     }
+
+    const FunctionData* var_func = nullptr;
     for (auto &&i: it->second) {
-      if (i.num_args == num_args) return &i;
+      if (i.num_args == num_args) {
+        return &i; // function with precise number of argument(s) should always be used first
+      } else if (i.num_args == INJA_VARARGS) {
+        var_func = &i; // store the VARARGS function for later use
+      }
     }
-    return nullptr;
+    return var_func;
   }
 
   std::map<std::string, std::vector<FunctionData>> m_map;
@@ -2066,6 +2074,11 @@ class Lexer {
   nonstd::string_view m_in;
   size_t m_tok_start;
   size_t m_pos;
+  bool global_trim_flag = false;
+
+  void flip_trim_flag() {
+    global_trim_flag = !global_trim_flag;
+  }
 
  public:
   explicit Lexer(const LexerConfig& config) : m_config(config) {}
@@ -2144,6 +2157,11 @@ class Lexer {
       case State::ExpressionStart: {
         m_state = State::ExpressionBody;
         m_pos += m_config.expression_open.size();
+        // whitespace control
+        if (m_in[m_pos] == '-') {
+          m_pos += 1;
+          flip_trim_flag();
+        }
         return make_token(Token::Kind::ExpressionOpen);
       }
       case State::LineStart: {
@@ -2154,11 +2172,21 @@ class Lexer {
       case State::StatementStart: {
         m_state = State::StatementBody;
         m_pos += m_config.statement_open.size();
+        // whitespace control
+        if (m_in[m_pos] == '-') {
+          m_pos += 1;
+          flip_trim_flag();
+        }
         return make_token(Token::Kind::StatementOpen);
       }
       case State::CommentStart: {
         m_state = State::CommentBody;
         m_pos += m_config.comment_open.size();
+        // whitespace control
+        if (m_in[m_pos] == '-') {
+          m_pos += 1;
+          flip_trim_flag();
+        }
         return make_token(Token::Kind::CommentOpen);
       }
       case State::ExpressionBody:
@@ -2198,13 +2226,22 @@ class Lexer {
       goto again;
     }
 
+    if (ch == '-') {
+      if (inja::string_view::starts_with(m_in.substr(m_tok_start + 1), close))
+        m_tok_start += 1;
+      else
+        return make_token(Token::Kind::Unknown);
+    }
+
     // check for close
     if (inja::string_view::starts_with(m_in.substr(m_tok_start), close)) {
       m_state = State::Text;
       m_pos = m_tok_start + close.size();
       Token tok = make_token(closeKind);
-      if (trim)
+      if (trim || global_trim_flag)
         skip_newline();
+      if (m_in[m_tok_start - 1] == '-')
+        flip_trim_flag();
       return tok;
     }
 
@@ -2218,6 +2255,7 @@ class Lexer {
     if (std::isalpha(ch)) {
       return scan_id();
     }
+
     switch (ch) {
       case ',':
         return make_token(Token::Kind::Comma);
@@ -3221,7 +3259,7 @@ class Renderer {
         }
         case Bytecode::Op::Push: {
           try{m_stack.emplace_back(*get_imm(bc));}
-          catch(std::exception &e){m_stack.emplace_back(json());}
+          catch(std::exception&){m_stack.emplace_back(json());}
           //m_stack.emplace_back(*get_imm(bc));
           break;
         }
@@ -3418,8 +3456,9 @@ class Renderer {
           bool result = false;
           try
           {
-            const std::string pointer = "/" + [](std::string str){std::string new_value = "/", old_value = ".";for(std::string::size_type pos(0); pos != std::string::npos; pos += new_value.length()){if((pos = str.find(old_value, pos)) != std::string::npos)str.replace(pos, old_value.length(), new_value);else break;}return str;}(name);
-            data.at(json::json_pointer(pointer));
+            std::string ptr;
+            convert_dot_to_json_pointer(name, ptr);
+            data.at(json::json_pointer(ptr));
             result = true;
           }
           catch (json::out_of_range &e)

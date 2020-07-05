@@ -32,6 +32,8 @@ struct responseRoute
 std::vector<responseRoute> responses;
 string_map redirect_map;
 
+const char *request_header_whitelist[] = {"user-agent"};
+
 static inline void buffer_cleanup(struct evbuffer *eb)
 {
     //evbuffer_free(eb);
@@ -40,47 +42,44 @@ static inline void buffer_cleanup(struct evbuffer *eb)
 #endif // MALLOC_TRIM
 }
 
-static inline int process_request(const char *method_str, std::string uri, std::string &postdata, std::string &content_type, std::string &return_data, int *status_code, std::map<std::string, std::string> &extra_headers)
+static inline int process_request(Request &request, Response &response, std::string &return_data)
 {
-    std::string path, arguments;
-    //std::cerr << "handle_cmd:    " << method_str << std::endl << "handle_uri:    " << uri << std::endl;
-    writeLog(0, "handle_cmd:    " + std::string(method_str) + " handle_uri:    " + uri, LOG_LEVEL_VERBOSE);
+    writeLog(0, "handle_cmd:    " + request.method + " handle_uri:    " + request.url, LOG_LEVEL_VERBOSE);
 
-    if(strFind(uri, "?"))
+    string_size pos = request.url.find("?");
+    if(pos != request.url.npos)
     {
-        path = uri.substr(0, uri.find("?"));
-        arguments = uri.substr(uri.find("?") + 1);
+        request.argument = request.url.substr(pos + 1);
+        request.url.erase(pos);
     }
-    else
-        path = uri;
 
     for(responseRoute &x : responses)
     {
-        if(strcmp(method_str, "OPTIONS") == 0 && x.method == postdata && x.path == path)
+        if(request.method == "OPTIONS" && request.postdata.find(x.method) != 0 && x.path == request.url)
         {
             return 1;
         }
-        else if(x.method.compare(method_str) == 0 && x.path == path)
+        else if(x.method == request.method && x.path == request.url)
         {
             response_callback &rc = x.rc;
-            return_data = rc(arguments, postdata, status_code, extra_headers);
-            content_type = x.content_type;
+            return_data = rc(request, response);
+            response.content_type = x.content_type;
             return 0;
         }
     }
 
-    auto iter = redirect_map.find(path);
+    auto iter = redirect_map.find(request.url);
     if(iter != redirect_map.end())
     {
         return_data = iter->second;
-        if(arguments.size())
+        if(request.argument.size())
         {
             if(return_data.find("?") != return_data.npos)
-                return_data += "&" + arguments;
+                return_data += "&" + request.argument;
             else
-                return_data += "?" + arguments;
+                return_data += "?" + request.argument;
         }
-        content_type = "REDIRECT";
+        response.content_type = "REDIRECT";
         return 0;
     }
 
@@ -117,16 +116,34 @@ void OnReq(evhttp_request *req, void *args)
         postdata.assign(req_ac_method);
     }
 
-    int status_code = 200;
-    std::map<std::string, std::string> extra_headers;
-    retVal = process_request(req_method, uri, postdata, content_type, return_data, &status_code, extra_headers);
+    Request request;
+    Response response;
+    request.method = req_method;
+    request.url = uri;
+
+    struct evkeyval* kv = req->input_headers->tqh_first;
+    while (kv)
+    {
+        for(auto &x : request_header_whitelist)
+        {
+            if(strcmp(kv->key, x) == 0)
+                request.headers.emplace(kv->key, kv->value);
+            kv = kv->next.tqe_next;
+        }
+    }
+    if(user_agent)
+        request.headers.emplace("X-User-Agent", user_agent);
+    request.headers.emplace("X-Client-IP", client_ip);
+
+    retVal = process_request(request, response, return_data);
+    content_type = response.content_type;
 
     auto *OutBuf = evhttp_request_get_output_buffer(req);
     //struct evbuffer *OutBuf = evbuffer_new();
     if (!OutBuf)
         return;
 
-    for(auto &x : extra_headers)
+    for(auto &x : response.headers)
         evhttp_add_header(req->output_headers, x.first.data(), x.second.data());
 
     switch(retVal)
@@ -134,7 +151,7 @@ void OnReq(evhttp_request *req, void *args)
     case 1: //found OPTIONS
         evhttp_add_header(req->output_headers, "Access-Control-Allow-Origin", "*");
         evhttp_add_header(req->output_headers, "Access-Control-Allow-Headers", "*");
-        evhttp_send_reply(req, status_code, "", NULL);
+        evhttp_send_reply(req, response.status_code, "", NULL);
         break;
     case 0: //found normal
         if(content_type.size())
@@ -152,7 +169,7 @@ void OnReq(evhttp_request *req, void *args)
         evhttp_add_header(req->output_headers, "Access-Control-Allow-Origin", "*");
         evhttp_add_header(req->output_headers, "Connection", "close");
         evbuffer_add(OutBuf, return_data.data(), return_data.size());
-        evhttp_send_reply(req, status_code, "", OutBuf);
+        evhttp_send_reply(req, response.status_code, "", OutBuf);
         break;
     case -1: //not found
         return_data = "File not found.";
@@ -168,7 +185,7 @@ void OnReq(evhttp_request *req, void *args)
 
 int start_web_server(void *argv)
 {
-    struct listener_args *args = (listener_args*)argv;
+    struct listener_args *args = reinterpret_cast<listener_args*>(argv);
     std::string listen_address = args->listen_address;
     int port = args->port;
     if (!event_init())
@@ -202,8 +219,8 @@ int start_web_server(void *argv)
 
 void* httpserver_dispatch(void *arg)
 {
-    event_base_dispatch((struct event_base*)arg);
-    event_base_free((struct event_base*)arg); //free resources
+    event_base_dispatch(reinterpret_cast<event_base*>(arg));
+    event_base_free(reinterpret_cast<event_base*>(arg)); //free resources
     return NULL;
 }
 
@@ -230,7 +247,7 @@ int httpserver_bindsocket(std::string listen_address, int listen_port, int backl
     addr.sin_addr.s_addr = inet_addr(listen_address.data());
     addr.sin_port = htons(listen_port);
 
-    ret = ::bind(nfd, (struct sockaddr*)&addr, sizeof(addr));
+    ret = ::bind(nfd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr));
     if (ret < 0)
     {
         closesocket(nfd);
@@ -287,6 +304,7 @@ int start_web_server_multi(void *argv)
     for (i = 0; i < nthreads; i++)
         event_base_loopbreak(base[i]); //stop the loop
 
+    shutdown(nfd, SD_BOTH); //stop accept call
     closesocket(nfd); //close listener socket
 
     return 0;
@@ -297,17 +315,17 @@ void stop_web_server()
     SERVER_EXIT_FLAG = true;
 }
 
-void append_response(std::string method, std::string uri, std::string content_type, response_callback response)
+void append_response(const std::string &method, const std::string &uri, const std::string &content_type, response_callback response)
 {
     responseRoute rr;
     rr.method = method;
     rr.path = uri;
     rr.content_type = content_type;
     rr.rc = response;
-    responses.emplace_back(rr);
+    responses.emplace_back(std::move(rr));
 }
 
-void append_redirect(std::string uri, std::string target)
+void append_redirect(const std::string &uri, const std::string &target)
 {
     redirect_map[uri] = target;
 }

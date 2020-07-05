@@ -2,9 +2,13 @@ common:
   api_mode: false
   api_access_token: password
   default_url: []
+  enable_insert: true
   insert_url: []
+  prepend_insert_url: true
   exclude_remarks: ["(到期|剩余流量|时间|官网|产品)"]
   include_remarks: []
+  enable_filter: false
+  filter_script: ""
   default_external_config: "" # config/example_external_config.yml
   base_path: base
   clash_rule_base: base/all_base.tpl
@@ -34,15 +38,18 @@ userinfo:
   - {match: "^.*?流量:(?:.*?) 剩:(.*?)天$", replace: "left=$1d"}
 
 node_pref:
-  udp_flag: false
-  tcp_fast_open_flag: false
+#  udp_flag: false
+#  tcp_fast_open_flag: false
   sort_flag: false
-  skip_cert_verify_flag: false
+  sort_script: ""
+#  skip_cert_verify_flag: false
   filter_deprecated_nodes: false
   append_sub_userinfo: true
-  clash_use_new_field_name: false
+  clash_use_new_field_name: true
   rename_node:
 #  - {match: "\\(?((x|X)?(\\d+)(\\.?\\d+)?)((\\s?倍率?)|(x|X))\\)?", replace: "$1x"}
+#  - {script: "function rename(node){}"}
+#  - {script: "path:/path/to/script.js"}
   - {import: snippets/rename_node.txt}
 
 managed_config:
@@ -60,18 +67,25 @@ emojis:
   remove_old_emoji: true
   rules:
 #  - {match: "(流量|时间|应急)", emoji: "🏳️‍🌈"}
+#  - {script: "function getEmoji(node){}"}
+#  - {script: "path:/path/to/script.js"}
   - {import: snippets/emoji.txt}
 
-ruleset:
+rulesets:
   enabled: true
   overwrite_original_rules: false
   update_ruleset_on_request: false
-  surge_ruleset:
+  rulesets:
 #  - {rule: "GEOIP,CN", group: "DIRECT"}
 #  - {ruleset: "rules/LocalAreaNetwork.list", group: "DIRECT"}
+#  - {ruleset: "surge:rules/LocalAreaNetwork.list", group: "DIRECT"}
+#  - {ruleset: "quanx:https://raw.githubusercontent.com/ConnersHua/Profiles/master/Quantumult/X/Filter/Advertising.list", group: "Advertising"}
+#  - {ruleset: "clash-domain:https://ruleset.dev/clash_domestic_services_domains", group: "Domestic Services"}
+#  - {ruleset: "clash-ipcidr:https://ruleset.dev/clash_domestic_services_ips", group: "Domestic Services"}
+#  - {ruleset: "clash-classic:https://raw.githubusercontent.com/DivineEngine/Profiles/master/Clash/RuleSet/China.yaml", group: "DIRECT"}
   - {import: snippets/rulesets.txt}
 
-proxy_group:
+proxy_groups:
   custom_proxy_group:
 #  - {name: UrlTest, type: url-test, rule: [".*"], url: http://www.gstatic.com/generate_204, interval: 300, tolerance: 100, timeout: 5}
 #  - {name: Proxy, type: select, rule: [".*"]}
@@ -115,6 +129,8 @@ advanced:
   print_debug_info: false
   max_pending_connections: 10240
   max_concurrent_threads: 2
+  max_allowed_rulesets: 0
+  max_allowed_rules: 0
   enable_base_gen: false
   enable_cache: false
   cache_subscription: 60

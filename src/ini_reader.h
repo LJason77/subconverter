@@ -216,8 +216,7 @@ public:
         std::string strLine, thisSection, curSection, itemName, itemVal;
         string_multimap itemGroup, existItemGroup;
         std::stringstream strStrm;
-        unsigned int lineSize = 0;
-        char delimiter = count(content.begin(), content.end(), '\n') < 1 ? '\r' : '\n';
+        char delimiter = getLineBreak(content);
 
         EraseAll(); //first erase all data
         if(do_utf8_to_gbk && is_str_utf8(content))
@@ -235,14 +234,12 @@ public:
         while(getline(strStrm, strLine, delimiter)) //get one line of content
         {
             last_error_index++;
-            lineSize = strLine.size();
+            string_size lineSize = strLine.size();
             if(lineSize && strLine[lineSize - 1] == '\r') //remove line break
-            {
-                strLine.erase(lineSize - 1);
-                lineSize--;
-            }
+                strLine.erase(--lineSize);
             if((!lineSize || strLine[0] == ';' || strLine[0] == '#' || (lineSize >= 2 && strLine[0] == '/' && strLine[1] == '/')) && !inDirectSaveSection) //empty lines and comments are ignored
                 continue;
+            ProcessEscapeChar(strLine);
             if(strLine[0] == '[' && strLine[lineSize - 1] == ']') //is a section title
             {
                 thisSection = strLine.substr(1, lineSize - 2); //save section title
@@ -268,7 +265,7 @@ public:
                         read_sections.push_back(curSection); //add to read sections list
                     ini_content.emplace(curSection, itemGroup); //insert previous section to content map
                     if(std::count(section_order.cbegin(), section_order.cend(), curSection) == 0)
-                        section_order.emplace_back(curSection);
+                        section_order.emplace_back(std::move(curSection));
                 }
 
                 eraseElements(itemGroup); //reset section storage
@@ -347,15 +344,7 @@ public:
     */
     string_array GetSections()
     {
-        string_array retData;
-
-        for(auto &x : ini_content)
-        {
-            retData.emplace_back(x.first);
-        }
-        //std::transform(ini_content.begin(), ini_content.end(), back_inserter(retData), [](auto x) -> std::string {return x.first;});
-
-        return retData;
+        return section_order;
     }
 
     /**
@@ -530,11 +519,9 @@ public:
             cached_section_content = ini_content.at(section);
         }
 
-        for(auto &x : cached_section_content)
-        {
-            if(x.first == itemName)
-                return x.second;
-        }
+        auto iter = std::find_if(cached_section_content.begin(), cached_section_content.end(), [&](auto x) { return x.first == itemName; });
+        if(iter != cached_section_content.end())
+            return iter->second;
 
         return std::string();
     }
@@ -611,25 +598,41 @@ public:
     }
 
     /**
-    * @brief Retrieve one boolean item value with the exact same name in the given section.
+    * @brief Retrieve one number item value with the exact same name in the given section.
     */
-    int GetIntIfExist(const std::string &section, const std::string &itemName, int &target)
+    template <typename T> int GetNumberIfExist(const std::string &section, const std::string &itemName, T &target)
     {
         std::string result;
         int retval = GetIfExist(section, itemName, result);
         if(retval != INIREADER_EXCEPTION_NONE)
             return retval;
         if(result.size())
-            target = to_int(result, target);
+            target = to_number<T>(result, target);
         return INIREADER_EXCEPTION_NONE;
     }
 
     /**
-    * @brief Retrieve one boolean item value with the exact same name in current section.
+    * @brief Retrieve one number item value with the exact same name in current section.
+    */
+    template <typename T> int GetNumberIfExist(const std::string &itemName, T &target)
+    {
+        return current_section.size() ? GetNumberIfExist(current_section, itemName, target) : INIREADER_EXCEPTION_NOTEXIST;
+    }
+
+    /**
+    * @brief Retrieve one integer item value with the exact same name in the given section.
+    */
+    int GetIntIfExist(const std::string &section, const std::string &itemName, int &target)
+    {
+        return GetNumberIfExist<int>(section, itemName, target);
+    }
+
+    /**
+    * @brief Retrieve one integer item value with the exact same name in current section.
     */
     int GetIntIfExist(const std::string &itemName, int &target)
     {
-        return current_section.size() ? GetIntIfExist(current_section, itemName, target) : INIREADER_EXCEPTION_NOTEXIST;
+        return GetNumberIfExist<int>(itemName, target);
     }
 
     /**
@@ -784,9 +787,8 @@ public:
     template <typename T> int SetArray(const std::string &section, const std::string &itemName, const std::string &separator, T &Array)
     {
         std::string data;
-        for(auto &x : Array)
-            data += std::to_string(x) + separator;
-        data = data.substr(0, data.size() - separator.size());
+        std::transform(std::begin(Array), std::end(Array), std::back_inserter(data), [&](auto x) { return std::to_string(x) + separator; });
+        data.erase(data.size() - 1);
         return Set(section, itemName, data);
     }
 

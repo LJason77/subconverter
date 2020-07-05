@@ -1,5 +1,4 @@
 #include <chrono>
-//#include <regex>
 #include <fstream>
 #include <thread>
 #include <sstream>
@@ -8,21 +7,28 @@
 #include <cstdio>
 //#include <filesystem>
 #include <unistd.h>
+#include <stdarg.h>
+#include <sys/stat.h>
 
+/*
 #ifdef USE_STD_REGEX
 #include <regex>
 #else
+*/
 #include <jpcre2.hpp>
 typedef jpcre2::select<char> jp;
-#endif // USE_STD_REGEX
+//#endif // USE_STD_REGEX
 
 #include <rapidjson/document.h>
 
+/*
 #ifdef USE_MBEDTLS
 #include <mbedtls/md5.h>
 #else
 #include <openssl/md5.h>
 #endif // USE_MBEDTLS
+*/
+#include "md5.h"
 
 #include "misc.h"
 
@@ -534,7 +540,7 @@ std::string replace_all_distinct(std::string str, const std::string &old_value, 
     }
     return str;
 }
-
+/*
 #ifdef USE_STD_REGEX
 bool regValid(const std::string &reg)
 {
@@ -611,46 +617,117 @@ bool regMatch(const std::string &src, const std::string &match)
     }
 }
 
+int regGetMatch(const std::string &src, const std::string &match, size_t group_count, ...)
+{
+    try
+    {
+        std::regex::flag_type flags = std::regex::extended | std::regex::ECMAScript;
+        std::string target = match;
+        if(match.find("(?i)") == 0)
+        {
+            target.erase(0, 4);
+            flags |= std::regex::icase;
+        }
+        std::regex reg(target, flags);
+        std::smatch result;
+        if(regex_search(src.cbegin(), src.cend(), result, reg))
+        {
+            if(result.size() < group_count - 1)
+                return -1;
+            va_list vl;
+            va_start(vl, group_count);
+            size_t index = 0;
+            while(group_count)
+            {
+                std::string* arg = va_arg(vl, std::string*);
+                if(arg != NULL)
+                    *arg = std::move(result[index]);
+                index++;
+                group_count--;
+            }
+            va_end(vl);
+        }
+        else
+            return -2;
+        return 0;
+    }
+    catch (std::regex_error&)
+    {
+        return -3;
+    }
+}
+
 #else
-
-bool regMatch(const std::string &src, const std::string &target)
+*/
+bool regMatch(const std::string &src, const std::string &match)
 {
     jp::Regex reg;
-    reg.setPattern(target).addModifier("gm").addPcre2Option(PCRE2_ANCHORED|PCRE2_ENDANCHORED|PCRE2_UTF).compile();
+    reg.setPattern(match).addModifier("m").addPcre2Option(PCRE2_ANCHORED|PCRE2_ENDANCHORED|PCRE2_UTF).compile();
     if(!reg)
         return false;
-    return reg.match(src);
+    return reg.match(src, "g");
 }
 
-bool regFind(const std::string &src, const std::string &target)
+bool regFind(const std::string &src, const std::string &match)
 {
     jp::Regex reg;
-    reg.setPattern(target).addModifier("gm").addPcre2Option(PCRE2_UTF).compile();
+    reg.setPattern(match).addModifier("m").addPcre2Option(PCRE2_UTF).compile();
     if(!reg)
         return false;
-    return reg.match(src);
+    return reg.match(src, "g");
 }
 
-std::string regReplace(const std::string &src, const std::string &target, const std::string &rep)
+std::string regReplace(const std::string &src, const std::string &match, const std::string &rep, bool global)
 {
     jp::Regex reg;
-    reg.setPattern(target).addModifier("gm").addPcre2Option(PCRE2_UTF).compile();
+    reg.setPattern(match).addModifier("m").addPcre2Option(PCRE2_UTF|PCRE2_MULTILINE).compile();
     if(!reg)
         return src;
-    return reg.replace(src, rep);
+    return reg.replace(src, rep, global ? "gx" : "x");
 }
 
-bool regValid(const std::string &target)
+bool regValid(const std::string &reg)
 {
-    jp::Regex reg(target);
-    return !!reg;
+    jp::Regex r(reg);
+    return !!r;
 }
 
-#endif // USE_STD_REGEX
+int regGetMatch(const std::string &src, const std::string &match, size_t group_count, ...)
+{
+    jp::Regex reg;
+    reg.setPattern(match).addModifier("m").addPcre2Option(PCRE2_UTF).compile();
+    jp::VecNum vec_num;
+    jp::RegexMatch rm;
+    size_t count = rm.setRegexObject(&reg).setSubject(src).setNumberedSubstringVector(&vec_num).setModifier("g").match();
+    if(!count)
+        return -1;
+    va_list vl;
+    va_start(vl, group_count);
+    size_t index = 0, match_index = 0;
+    while(group_count)
+    {
+        std::string* arg = va_arg(vl, std::string*);
+        if(arg != NULL)
+            *arg = std::move(vec_num[match_index][index]);
+        index++;
+        group_count--;
+        if(vec_num[match_index].size() <= index)
+        {
+            match_index++;
+            index = 0;
+        }
+        if(vec_num.size() <= match_index)
+            break;
+    }
+    va_end(vl);
+    return 0;
+}
+
+//#endif // USE_STD_REGEX
 
 std::string regTrim(const std::string &src)
 {
-    return regReplace(src, "^\\s*?(.*?)\\s*$", "$1");
+    return regReplace(src, "^\\s*?([\\s\\S]*)\\s*$", "$1", false);
 }
 
 std::string speedCalc(double speed)
@@ -694,6 +771,8 @@ std::string urlsafe_base64_encode(const std::string &string_to_encode)
 std::string getMD5(const std::string &data)
 {
     std::string result;
+
+    /*
     unsigned int i = 0;
     unsigned char digest[16] = {};
 
@@ -719,8 +798,28 @@ std::string getMD5(const std::string &data)
         snprintf(tmp, 3, "%02x", digest[i]);
         result += tmp;
     }
+    */
+
+    char result_str[MD5_STRING_SIZE];
+    md5::md5_t md5;
+    md5.process(data.data(), data.size());
+    md5.finish();
+    md5.get_string(result_str);
+    result.assign(result_str);
 
     return result;
+}
+
+bool isInScope(const std::string &path)
+{
+#ifdef _WIN32
+    if(path.find(":\\") != path.npos || path.find("..") != path.npos)
+        return false;
+#else
+    if(path.find("/") == 0 || path.find("..") != path.npos)
+        return false;
+#endif // _WIN32
+    return true;
 }
 
 // TODO: Add preprocessor option to disable (open web service safety)
@@ -728,16 +827,8 @@ std::string fileGet(const std::string &path, bool scope_limit)
 {
     std::string content;
 
-    if(scope_limit)
-    {
-#ifdef _WIN32
-        if(path.find(":\\") != path.npos || path.find("..") != path.npos)
-            return std::string();
-#else
-        if(path.find("/") == 0 || path.find("..") != path.npos)
-            return std::string();
-#endif // _WIN32
-    }
+    if(scope_limit && !isInScope(path))
+        return std::string();
 
     std::FILE *fp = std::fopen(path.c_str(), "rb");
     if(fp)
@@ -773,11 +864,14 @@ std::string fileGet(const std::string &path, bool scope_limit)
     return content;
 }
 
-bool fileExist(const std::string &path)
+bool fileExist(const std::string &path, bool scope_limit)
 {
     //using c++17 standard, but may cause problem on clang
     //return std::filesystem::exists(path);
-    return _access(path.data(), 4) != -1;
+    if(scope_limit && !isInScope(path))
+        return false;
+    struct stat st;
+    return stat(path.data(), &st) == 0 && S_ISREG(st.st_mode);
 }
 
 bool fileCopy(const std::string &source, const std::string &dest)
@@ -1065,4 +1159,45 @@ std::string UTF8ToCodePoint(const std::string &data)
         }
     }
     return ss.str();
+}
+
+std::string toLower(const std::string &str)
+{
+    std::string result;
+    std::transform(str.begin(), str.end(), std::back_inserter(result), [](unsigned char c) { return std::tolower(c); });
+    return result;
+}
+
+std::string toUpper(const std::string &str)
+{
+    std::string result;
+    std::transform(str.begin(), str.end(), std::back_inserter(result), [](unsigned char c) { return std::toupper(c); });
+    return result;
+}
+
+void ProcessEscapeChar(std::string &str)
+{
+    string_size pos = str.find('\\');
+    while(pos != str.npos)
+    {
+        if(pos == str.size())
+            break;
+        switch(str[pos + 1])
+        {
+        case 'n':
+            str.replace(pos, 2, "\n");
+            break;
+        case 'r':
+            str.replace(pos, 2, "\r");
+            break;
+        case 't':
+            str.replace(pos, 2, "\t");
+            break;
+        default:
+            /// ignore others for backward compatibility
+            //str.erase(pos, 1);
+            break;
+        }
+        pos = str.find('\\', pos + 1);
+    }
 }
