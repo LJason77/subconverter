@@ -25,6 +25,7 @@ struct ruleset_content
     std::string rule_path_typed;
     int rule_type = RULESET_SURGE;
     std::shared_future<std::string> rule_content;
+    int update_interval = 0;
 };
 
 struct extra_settings
@@ -47,8 +48,10 @@ struct extra_settings
     tribool udp = tribool();
     tribool tfo = tribool();
     tribool skip_cert_verify = tribool();
+    tribool tls13 = tribool();
     bool clash_classical_ruleset = false;
     std::string sort_script = "";
+    std::string clash_proxies_style = "flow";
 };
 
 void rulesetToClash(YAML::Node &base_rule, std::vector<ruleset_content> &ruleset_content_array, bool overwrite_original_rules, bool new_field_name);

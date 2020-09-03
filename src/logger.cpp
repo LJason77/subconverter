@@ -7,8 +7,8 @@
 
 #include "logger.h"
 
-extern bool print_debug_info;
-int global_log_level = LOG_LEVEL_INFO;
+extern bool gPrintDbgInfo;
+int gLogLevel = LOG_LEVEL_INFO;
 
 std::string getTime(int type)
 {
@@ -36,9 +36,9 @@ std::string getTime(int type)
     return std::string(tmpbuf);
 }
 
-void writeLog(int type, std::string content, int level)
+void writeLog(int type, const std::string &content, int level)
 {
-    if(level > global_log_level)
+    if(level > gLogLevel)
         return;
     const char *levels[] = {"[FATL]", "[ERRO]", "[WARN]", "[INFO]", "[DEBG]", "[VERB]"};
     std::cerr<<getTime(2)<<" ["<<getpid()<<" "<<std::this_thread::get_id()<<"]"<<levels[level % 6];

@@ -21,6 +21,72 @@
 extern std::string user_agent_str;
 std::atomic_bool SERVER_EXIT_FLAG(false);
 
+// file server
+bool gServeFile = false;
+std::string gServeFileRoot;
+
+struct MIME_type
+{
+    std::string extension;
+    std::string mimetype;
+};
+
+MIME_type mime_types[] = {{"html htm shtml","text/html"},
+                          {"css",           "text/css"},
+                          {"jpeg jpg",      "image/jpeg"},
+                          {"js",            "application/javascript"},
+                          {"txt",           "text/plain"},
+                          {"png",           "image/png"},
+                          {"ico",           "image/x-icon"},
+                          {"svg svgz",      "image/svg+xml"},
+                          {"woff",          "application/font-woff"},
+                          {"json",          "application/json"}};
+
+bool matchSpaceSeparatedList(const std::string& source, const std::string &target)
+{
+    string_size pos_begin = 0, pos_end, total = source.size();
+    while(pos_begin < total)
+    {
+        pos_end = source.find(' ', pos_begin);
+        if(pos_end == source.npos)
+            pos_end = total;
+        if(source.compare(pos_begin, pos_end - pos_begin, target) == 0)
+            return true;
+        pos_begin = pos_end + 1;
+    }
+    return false;
+}
+
+std::string checkMIMEType(const std::string filename)
+{
+    string_size name_begin = 0, name_end = 0;
+    name_begin = filename.rfind('/');
+    if(name_begin == filename.npos)
+        name_begin = 0;
+    name_end = filename.rfind('.');
+    if(name_end == filename.npos || name_end < name_begin || name_end == filename.size() - 1)
+        return "application/octet-stream";
+    std::string extension = filename.substr(name_end + 1);
+    for(MIME_type &x : mime_types)
+        if(matchSpaceSeparatedList(x.extension, extension))
+            return x.mimetype;
+    return "application/octet-stream";
+}
+
+int serveFile(const std::string &filename, std::string &content_type, std::string &return_data)
+{
+    std::string realname = gServeFileRoot + filename;
+    if(filename.compare("/") == 0)
+        realname += "index.html";
+    if(!fileExist(realname))
+        return 1;
+
+    return_data = fileGet(realname, false);
+    content_type = checkMIMEType(realname);
+    writeLog(0, "file-server: serving '" + filename + "' type '" + content_type + "'", LOG_LEVEL_INFO);
+    return 0;
+}
+
 struct responseRoute
 {
     std::string method;
@@ -32,7 +98,7 @@ struct responseRoute
 std::vector<responseRoute> responses;
 string_map redirect_map;
 
-const char *request_header_whitelist[] = {"user-agent"};
+const char *request_header_blacklist[] = {"host", "accept", "accept-encoding"};
 
 static inline void buffer_cleanup(struct evbuffer *eb)
 {
@@ -55,7 +121,7 @@ static inline int process_request(Request &request, Response &response, std::str
 
     for(responseRoute &x : responses)
     {
-        if(request.method == "OPTIONS" && request.postdata.find(x.method) != 0 && x.path == request.url)
+        if(request.method == "OPTIONS" && startsWith(request.postdata, x.method) && x.path == request.url)
         {
             return 1;
         }
@@ -83,60 +149,66 @@ static inline int process_request(Request &request, Response &response, std::str
         return 0;
     }
 
+    if(gServeFile)
+    {
+        if(request.method.compare("GET") == 0 && serveFile(request.url, response.content_type, return_data) == 0)
+            return 0;
+    }
+
     return -1;
 }
 
 void OnReq(evhttp_request *req, void *args)
 {
     const char *req_content_type = evhttp_find_header(req->input_headers, "Content-Type"), *req_ac_method = evhttp_find_header(req->input_headers, "Access-Control-Request-Method");
-    const char *req_method = req_ac_method == NULL ? EVBUFFER_LENGTH(req->input_buffer) == 0 ? "GET" : "POST" : "OPTIONS", *uri = req->uri;
-    const char *user_agent = evhttp_find_header(req->input_headers, "User-Agent");
+    const char *uri = req->uri, *internal_flag = evhttp_find_header(req->input_headers, "SubConverter-Request");
+
     char *client_ip;
     u_short client_port;
     evhttp_connection_get_peer(evhttp_request_get_connection(req), &client_ip, &client_port);
     //std::cerr<<"Accept connection from client "<<client_ip<<":"<<client_port<<"\n";
     writeLog(0, "Accept connection from client " + std::string(client_ip) + ":" + std::to_string(client_port), LOG_LEVEL_DEBUG);
-    int retVal;
-    std::string postdata, content_type, return_data;
 
-    if(user_agent != NULL && user_agent_str.compare(user_agent) == 0)
+    if(internal_flag != NULL && strcmp(internal_flag, "1") == 0)
     {
         evhttp_send_error(req, 500, "Loop request detected!");
         return;
     }
 
+    Request request;
+    Response response;
     if(EVBUFFER_LENGTH(req->input_buffer) != 0)
     {
-        postdata.assign((char *)EVBUFFER_DATA(req->input_buffer), EVBUFFER_LENGTH(req->input_buffer));
+        request.postdata.assign((char *)EVBUFFER_DATA(req->input_buffer), EVBUFFER_LENGTH(req->input_buffer));
         if(req_content_type != NULL && strcmp(req_content_type, "application/x-www-form-urlencoded") == 0)
-            postdata = UrlDecode(postdata);
+            request.postdata = UrlDecode(request.postdata);
     }
     else if(req_ac_method != NULL)
     {
-        postdata.assign(req_ac_method);
+        request.postdata.assign(req_ac_method);
     }
 
-    Request request;
-    Response response;
-    request.method = req_method;
+    switch(req->type)
+    {
+        case EVHTTP_REQ_GET: request.method = "GET"; break;
+        case EVHTTP_REQ_POST: request.method = "POST"; break;
+        case EVHTTP_REQ_OPTIONS: request.method = "OPTIONS"; break;
+        default: break;
+    }
     request.url = uri;
 
     struct evkeyval* kv = req->input_headers->tqh_first;
     while (kv)
     {
-        for(auto &x : request_header_whitelist)
-        {
-            if(strcmp(kv->key, x) == 0)
-                request.headers.emplace(kv->key, kv->value);
-            kv = kv->next.tqe_next;
-        }
+        if(std::none_of(std::begin(request_header_blacklist), std::end(request_header_blacklist), [&](auto x){ return strcasecmp(kv->key, x) == 0; }))
+            request.headers.emplace(kv->key, kv->value);
+        kv = kv->next.tqe_next;
     }
-    if(user_agent)
-        request.headers.emplace("X-User-Agent", user_agent);
     request.headers.emplace("X-Client-IP", client_ip);
 
-    retVal = process_request(request, response, return_data);
-    content_type = response.content_type;
+    std::string return_data;
+    int retVal = process_request(request, response, return_data);
+    std::string content_type = response.content_type;
 
     auto *OutBuf = evhttp_request_get_output_buffer(req);
     //struct evbuffer *OutBuf = evbuffer_new();
@@ -226,19 +298,23 @@ void* httpserver_dispatch(void *arg)
 
 int httpserver_bindsocket(std::string listen_address, int listen_port, int backlog)
 {
-    int ret;
     SOCKET nfd;
     nfd = socket(AF_INET, SOCK_STREAM, 0);
     if (nfd <= 0)
+        return -1;
+
+    int one = 1;
+    if (setsockopt(nfd, SOL_SOCKET, SO_REUSEADDR, (char *)&one, sizeof(int)) < 0)
     {
         closesocket(nfd);
         return -1;
     }
-
-    int one = 1;
-    ret = setsockopt(nfd, SOL_SOCKET, SO_REUSEADDR, (char *)&one, sizeof(int));
 #ifdef SO_NOSIGPIPE
-    ret = setsockopt(nfd, SOL_SOCKET, SO_NOSIGPIPE, (char *)&one, sizeof(int));
+    if (setsockopt(nfd, SOL_SOCKET, SO_NOSIGPIPE, (char *)&one, sizeof(int)) < 0)
+    {
+        closesocket(nfd);
+        return -1;
+    }
 #endif
 
     struct sockaddr_in addr;
@@ -247,14 +323,7 @@ int httpserver_bindsocket(std::string listen_address, int listen_port, int backl
     addr.sin_addr.s_addr = inet_addr(listen_address.data());
     addr.sin_port = htons(listen_port);
 
-    ret = ::bind(nfd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr));
-    if (ret < 0)
-    {
-        closesocket(nfd);
-        return -1;
-    }
-    ret = listen(nfd, backlog);
-    if (ret < 0)
+    if (::bind(nfd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) < 0 || listen(nfd, backlog) < 0)
     {
         closesocket(nfd);
         return -1;
@@ -271,7 +340,7 @@ int start_web_server_multi(void *argv)
     struct listener_args *args = reinterpret_cast<listener_args*>(argv);
     std::string listen_address = args->listen_address;
     int port = args->port, nthreads = args->max_workers;
-    int i, ret;
+    int i;
 
     int nfd = httpserver_bindsocket(listen_address, port, args->max_conn);
     if (nfd < 0)
@@ -287,18 +356,16 @@ int start_web_server_multi(void *argv)
         struct evhttp *httpd = evhttp_new(base[i]);
         if (httpd == NULL)
             return -1;
-        ret = evhttp_accept_socket(httpd, nfd);
-        if (ret != 0)
+        if (evhttp_accept_socket(httpd, nfd) != 0)
             return -1;
 
         evhttp_set_allowed_methods(httpd, EVHTTP_REQ_GET | EVHTTP_REQ_POST | EVHTTP_REQ_OPTIONS);
         evhttp_set_gencb(httpd, OnReq, nullptr);
         evhttp_set_timeout(httpd, 30);
-        ret = pthread_create(&ths[i], NULL, httpserver_dispatch, base[i]);
-        if (ret != 0)
+        if (pthread_create(&ths[i], NULL, httpserver_dispatch, base[i]) != 0)
             return -1;
     }
-    while(!SERVER_EXIT_FLAG)
+    while (!SERVER_EXIT_FLAG)
         sleep(200); //block forever until receive stop signal
 
     for (i = 0; i < nthreads; i++)

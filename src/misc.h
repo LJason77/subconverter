@@ -52,9 +52,10 @@ std::string urlsafe_base64_decode(const std::string &encoded_string);
 std::string urlsafe_base64_encode(const std::string &string_to_encode);
 std::string UTF8ToACP(const std::string &str_src);
 std::string ACPToUTF8(const std::string &str_src);
-std::string trim_of(const std::string& str, char target);
-std::string trim(const std::string& str);
-std::string trim_quote(const std::string &str);
+std::string trim_of(const std::string& str, char target, bool before = true, bool after = true);
+std::string trim(const std::string& str, bool before = true, bool after = true);
+std::string trim_quote(const std::string &str, bool before = true, bool after = true);
+void trim_self_of(std::string &str, char target, bool before = true, bool after = true);
 std::string getSystemProxy();
 std::string rand_str(const int len);
 bool is_str_utf8(const std::string &data);
@@ -63,7 +64,7 @@ std::string getFormData(const std::string &raw_data);
 void sleep(int interval);
 bool regValid(const std::string &reg);
 bool regFind(const std::string &src, const std::string &match);
-std::string regReplace(const std::string &src, const std::string &match, const std::string &rep, bool global = true);
+std::string regReplace(const std::string &src, const std::string &match, const std::string &rep, bool global = true, bool multiline = true);
 bool regMatch(const std::string &src, const std::string &match);
 int regGetMatch(const std::string &src, const std::string &match, size_t group_count, ...);
 std::string regTrim(const std::string &src);
@@ -80,6 +81,7 @@ std::string GetEnv(const std::string &name);
 std::string toLower(const std::string &str);
 std::string toUpper(const std::string &str);
 void ProcessEscapeChar(std::string &str);
+void ProcessEscapeCharReverse(std::string &str);
 
 std::string fileGet(const std::string &path, bool scope_limit = false);
 int fileWrite(const std::string &path, const std::string &content, bool overwrite);
@@ -153,7 +155,7 @@ class tribool
 {
 private:
 
-    int _M_VALUE = -1;
+    char _M_VALUE = 0;
 
 public:
 
@@ -161,7 +163,7 @@ public:
 
     template <typename T> tribool(const T &value) { set(value); }
 
-    explicit tribool(const tribool &value) { *this = value; }
+    tribool(const tribool &value) { *this = value; }
 
     ~tribool() = default;
 
@@ -177,33 +179,53 @@ public:
         return *this;
     }
 
-    operator bool() const { return _M_VALUE == 1; }
+    operator bool() const { return _M_VALUE == 3; }
 
-    bool is_undef() { return _M_VALUE == -1; }
+    bool is_undef() const { return _M_VALUE <= 1; }
 
-    template <typename T> void define(const T &value)
+    template <typename T> tribool define(const T &value)
     {
-        if(_M_VALUE == -1)
+        if(_M_VALUE <= 1)
             *this = value;
+        return *this;
     }
 
-    template <typename T> tribool read(const T &value)
+    template <typename T> tribool parse(const T &value)
     {
         define(value);
         return *this;
     }
 
-    bool get(const bool &def_value = false)
+    tribool reverse()
     {
-        if(_M_VALUE == -1)
+        if(_M_VALUE > 1)
+            _M_VALUE = _M_VALUE > 2 ? 2 : 3;
+        return *this;
+    }
+
+    bool get(const bool &def_value = false) const
+    {
+        if(_M_VALUE <= 1)
             return def_value;
-        return _M_VALUE;
+        return _M_VALUE == 3;
+    }
+
+    std::string get_str() const
+    {
+        switch(_M_VALUE)
+        {
+        case 2:
+            return "false";
+        case 3:
+            return "true";
+        }
+        return "undef";
     }
 
     template <typename T> bool set(const T &value)
     {
-        _M_VALUE = value;
-        return _M_VALUE;
+        _M_VALUE = (bool)value + 2;
+        return _M_VALUE > 2;
     }
 
     bool set(const std::string &str)
@@ -212,23 +234,23 @@ public:
         {
         case "true"_hash:
         case "1"_hash:
-            _M_VALUE = 1;
+            _M_VALUE = 3;
             break;
         case "false"_hash:
         case "0"_hash:
-            _M_VALUE = 0;
+            _M_VALUE = 2;
             break;
         default:
             if(to_int(str, 0) > 1)
-                _M_VALUE = 1;
+                _M_VALUE = 3;
             else
-                _M_VALUE = -1;
+                _M_VALUE = 0;
             break;
         }
         return _M_VALUE;
     }
 
-    void clear() { _M_VALUE = -1; }
+    void clear() { _M_VALUE = 0; }
 };
 
 #ifndef HAVE_TO_STRING

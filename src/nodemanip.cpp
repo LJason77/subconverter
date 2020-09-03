@@ -12,14 +12,14 @@
 
 std::string override_conf_port;
 bool ss_libev, ssr_libev;
-extern int cache_subscription;
+extern int gCacheSubscription;
 
 void copyNodes(std::vector<nodeInfo> &source, std::vector<nodeInfo> &dest)
 {
     std::move(source.begin(), source.end(), std::back_inserter(dest));
 }
 
-int addNodes(std::string link, std::vector<nodeInfo> &allNodes, int groupID, std::string proxy, string_array &exclude_remarks, string_array &include_remarks, string_array &stream_rules, string_array &time_rules, std::string &subInfo, bool authorized, string_map &request_headers)
+int addNodes(std::string link, std::vector<nodeInfo> &allNodes, int groupID, const std::string &proxy, string_array &exclude_remarks, string_array &include_remarks, string_array &stream_rules, string_array &time_rules, std::string &subInfo, bool authorized, string_map &request_headers)
 {
     int linkType = -1;
     std::vector<nodeInfo> nodes;
@@ -90,7 +90,7 @@ int addNodes(std::string link, std::vector<nodeInfo> &allNodes, int groupID, std
         writeLog(LOG_TYPE_INFO, "Downloading subscription data...");
         if(startsWith(link, "surge:///install-config")) //surge config link
             link = UrlDecode(getUrlArg(link, "url"));
-        strSub = webGet(link, proxy, cache_subscription, &extra_headers, &request_headers);
+        strSub = webGet(link, proxy, gCacheSubscription, &extra_headers, &request_headers);
         /*
         if(strSub.size() == 0)
         {
@@ -113,7 +113,7 @@ int addNodes(std::string link, std::vector<nodeInfo> &allNodes, int groupID, std
                 writeLog(LOG_TYPE_ERROR, "Invalid subscription!");
                 return -1;
             }
-            if(strSub.find("ssd://") == 0)
+            if(startsWith(strSub, "ssd://"))
             {
                 getSubInfoFromSSD(strSub, subInfo);
             }
@@ -146,7 +146,7 @@ int addNodes(std::string link, std::vector<nodeInfo> &allNodes, int groupID, std
             writeLog(LOG_TYPE_ERROR, "Invalid configuration file!");
             return -1;
         }
-        if(strSub.find("ssd://") == 0)
+        if(startsWith(strSub, "ssd://"))
         {
             getSubInfoFromSSD(strSub, subInfo);
         }

@@ -9,8 +9,8 @@
 #include "socket.h"
 #include "webget.h"
 
-extern int cache_config;
-extern std::string proxy_config;
+extern int gCacheConfig;
+extern std::string gProxyConfig;
 
 std::string parseProxy(const std::string &source);
 
@@ -23,7 +23,7 @@ std::string foldPathString(const std::string &path)
         pos_up = output.find("../", pos_unres);
         if(pos_up == output.npos)
             break;
-        else if(pos_up == 0)
+        if(pos_up == 0)
         {
             pos_unres = pos_up + 3;
             continue;
@@ -65,10 +65,9 @@ duk_ret_t cb_resolve_module(duk_context *ctx)
     const char *requested_id = duk_get_string(ctx, 0);
     const char *parent_id = duk_get_string(ctx, 1);  /* calling module */
     //const char *resolved_id;
-    std::string resolved_id;
-    if(strlen(parent_id))
+    std::string resolved_id, parent_path = parent_id;
+    if(!parent_path.empty())
     {
-        std::string parent_path = parent_id;
         string_size pos = parent_path.rfind("/");
         if(pos != parent_path.npos)
             resolved_id += parent_path.substr(0, pos + 1);
@@ -108,9 +107,24 @@ static duk_ret_t native_print(duk_context *ctx)
 
 static duk_ret_t fetch(duk_context *ctx)
 {
+    /*
     std::string filepath, proxy;
     duktape_get_arguments_str(ctx, 1, 2, &filepath, &proxy);
-    std::string content = fetchFile(filepath, proxy, cache_config);
+    std::string content = fetchFile(filepath, proxy, gCacheConfig);
+    duk_push_lstring(ctx, content.c_str(), content.size());
+    */
+    std::string filepath, proxy, method, postdata, content;
+    if(duktape_get_arguments_str(ctx, 1, 4, &filepath, &proxy, &method, &postdata) == 0)
+        return 0;
+    switch(hash_(method))
+    {
+    case "POST"_hash:
+        webPost(filepath, postdata, proxy, string_array{}, &content);
+        break;
+    default:
+        content = fetchFile(filepath, proxy, gCacheConfig);
+        break;
+    }
     duk_push_lstring(ctx, content.c_str(), content.size());
     return 1;
 }
@@ -139,7 +153,7 @@ static duk_ret_t getGeoIP(duk_context *ctx)
     if(address.empty())
         duk_push_undefined(ctx);
     else
-        duk_push_string(ctx, fetchFile("https://api.ip.sb/geoip/" + address, parseProxy(proxy), cache_config).c_str());
+        duk_push_string(ctx, fetchFile("https://api.ip.sb/geoip/" + address, parseProxy(proxy), gCacheConfig).c_str());
     return 1;
 }
 
@@ -193,13 +207,6 @@ int duktape_call_function(duk_context *ctx, const std::string &name, size_t narg
     return duk_pcall(ctx, nargs);
 }
 
-int duktape_get_res_int(duk_context *ctx)
-{
-    int retval = duk_to_int(ctx, -1);
-    duk_pop(ctx);
-    return retval;
-}
-
 int duktape_push_nodeinfo(duk_context *ctx, const nodeInfo &node)
 {
     duk_push_object(ctx);
@@ -237,8 +244,17 @@ int duktape_push_nodeinfo_arr(duk_context *ctx, const nodeInfo &node, duk_idx_t 
     return 0;
 }
 
+int duktape_get_res_int(duk_context *ctx)
+{
+    int retval = duk_to_int(ctx, -1);
+    duk_pop(ctx);
+    return retval;
+}
+
 std::string duktape_get_res_str(duk_context *ctx)
 {
+    if(duk_is_null_or_undefined(ctx, -1))
+        return std::string();
     std::string retstr = duk_safe_to_string(ctx, -1);
     duk_pop(ctx);
     return retstr;
