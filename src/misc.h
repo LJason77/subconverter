@@ -5,6 +5,9 @@
 #include <vector>
 #include <sstream>
 #include <algorithm>
+#include <sys/types.h>
+#include <dirent.h>
+#include <string.h>
 
 #include <yaml-cpp/yaml.h>
 
@@ -90,6 +93,25 @@ bool fileCopy(const std::string &source, const std::string &dest);
 std::string fileToBase64(const std::string &filepath);
 std::string fileGetMD5(const std::string &filepath);
 
+template<typename F>
+int operateFiles(const std::string &path, F &&op)
+{
+    DIR* dir = opendir(path.data());
+    if(!dir)
+        return -1;
+    struct dirent* dp;
+    while((dp = readdir(dir)) != NULL)
+    {
+        if(strcmp(dp->d_name, ".") != 0 && strcmp(dp->d_name, "..") != 0)
+        {
+            if(op(dp->d_name))
+                break;
+        }
+    }
+    closedir(dir);
+    return 0;
+}
+
 static inline bool strFind(const std::string &str, const std::string &target)
 {
     return str.find(target) != str.npos;
@@ -163,7 +185,7 @@ public:
 
     template <typename T> tribool(const T &value) { set(value); }
 
-    tribool(const tribool &value) { *this = value; }
+    tribool(const tribool &value) { _M_VALUE = value._M_VALUE; }
 
     ~tribool() = default;
 
@@ -183,17 +205,16 @@ public:
 
     bool is_undef() const { return _M_VALUE <= 1; }
 
-    template <typename T> tribool define(const T &value)
+    template <typename T> tribool& define(const T &value)
     {
         if(_M_VALUE <= 1)
             *this = value;
         return *this;
     }
 
-    template <typename T> tribool parse(const T &value)
+    template <typename T> tribool& parse(const T &value)
     {
-        define(value);
-        return *this;
+        return define(value);
     }
 
     tribool reverse()

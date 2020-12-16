@@ -105,6 +105,16 @@ int main(int argc, char *argv[])
 #endif // _DEBUG
     if(fileExist("pref.yml"))
         gPrefPath = "pref.yml";
+    else if(!fileExist("pref.ini"))
+    {
+        if(fileExist("pref.example.yml"))
+        {
+            fileCopy("pref.example.yml", "pref.yml");
+            gPrefPath = "pref.yml";
+        }
+        else if(fileExist("pref.example.ini"))
+            fileCopy("pref.example.ini", "pref.ini");
+    }
     chkArg(argc, argv);
     setcd(gPrefPath); //then switch to pref directory
     writeLog(0, "SubConverter " VERSION " starting up..", LOG_LEVEL_INFO);
@@ -182,6 +192,8 @@ int main(int argc, char *argv[])
             }
         }
         readConf();
+        if(!gUpdateRulesetOnRequest)
+            refreshRulesets(gCustomRulesets, gRulesetContent);
         return "done\n";
     });
 
@@ -211,6 +223,17 @@ int main(int argc, char *argv[])
         if(!gUpdateRulesetOnRequest)
             refreshRulesets(gCustomRulesets, gRulesetContent);
         return "done\n";
+    });
+
+    append_response("GET", "/flushcache", "text/plain", [](RESPONSE_CALLBACK_ARGS) -> std::string
+    {
+        if(getUrlArg(request.argument, "token") != gAccessToken)
+        {
+            response.status_code = 403;
+            return "Forbidden";
+        }
+        flushCache();
+        return "done";
     });
 
     append_response("GET", "/sub", "text/plain;charset=utf-8", subconverter);
