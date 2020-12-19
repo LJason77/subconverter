@@ -101,8 +101,8 @@ proxy_groups:
 template:
   template_path: "templates"
   globals:
-  - {key: clash.http_port, value: 7890}
-  - {key: clash.socks_port, value: 7891}
+  - {key: clash.http_port, value: 8123}
+  - {key: clash.socks_port, value: 1080}
   - {key: clash.allow_lan, value: true}
   - {key: clash.log_level, value: info}
   
