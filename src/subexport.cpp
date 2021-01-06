@@ -867,7 +867,7 @@ void rulesetToSurge(INIReader &base_rule, std::vector<ruleset_content> &ruleset_
                 }
                 else if(surge_ver == -4 && remote_path_prefix.size())
                 {
-                    strLine = remote_path_prefix + "/getruleset?type=1&url=" + urlsafe_base64_encode(rule_path_typed) + "," + rule_group;
+                    strLine = "https://ljason.cn/clash/getruleset?type=1&url=" + urlsafe_base64_encode(rule_path_typed) + "," + rule_group;
                     base_rule.Set("Remote Rule", "{NONAME}", strLine);
                     continue;
                 }
